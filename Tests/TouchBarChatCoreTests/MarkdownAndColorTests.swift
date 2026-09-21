@@ -19,6 +19,24 @@ final class MarkdownAndColorTests: XCTestCase {
         XCTAssertEqual(MarkdownText.collapseForTouchBar("  x  "), "x")
     }
 
+    func testHeadingsBecomeBoldMarkersBeforeCollapse() {
+        let collapsed = MarkdownText.collapseForTouchBar("""
+        ### Hello
+        world
+        """)
+        XCTAssertFalse(collapsed.contains("#"))
+        XCTAssertTrue(collapsed.contains("**Hello**"))
+        XCTAssertTrue(collapsed.contains("world"))
+    }
+
+    func testPrepareForDisplayAllHeadingLevels() {
+        for level in 1...6 {
+            let marks = String(repeating: "#", count: level)
+            let out = MarkdownText.prepareForDisplay("\(marks) Title")
+            XCTAssertEqual(out, "**Title**", "level \(level)")
+        }
+    }
+
     func testPlainStringStripsMarkup() {
         let plain = MarkdownText.plainString("**bold** and `code` and [link](https://x)")
         XCTAssertEqual(plain, "bold and code and link")

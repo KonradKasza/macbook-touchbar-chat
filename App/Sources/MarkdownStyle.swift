@@ -11,7 +11,8 @@ enum MarkdownStyle {
         baseColor: NSColor = NSColor(calibratedWhite: 0.92, alpha: 1),
         theme: ChatHistoryTheme? = nil
     ) -> NSAttributedString {
-        let plain = String(markdown)
+        // Headings → **bold** first so `### Title` never shows literal hashes (Touch Bar + window).
+        let plain = MarkdownText.prepareForDisplay(String(markdown))
         let result = NSMutableAttributedString(string: plain)
 
         let bodyFont: NSFont
@@ -97,13 +98,16 @@ enum MarkdownStyle {
             ]
         )
 
-        stripPattern(in: result, pattern: #"(?m)^#{1,6}\s+"#)
+        // Safety net for any remaining ATX hashes (line-start or mid-string after collapse).
+        stripPattern(in: result, pattern: #"(?m)^[ \t]*#{1,6}[ \t]+"#)
+        stripPattern(in: result, pattern: #"(?<!\*)#{1,6}[ \t]+"#)
         stripPattern(in: result, pattern: #"(?m)^[\-\*]\s+"#, replacement: "• ")
 
         return result
     }
 
     static func touchBarPreview(_ markdown: String) -> NSAttributedString {
+        // Headings are promoted to **bold** before newlines collapse (so `###` never sticks as text).
         let collapsed = MarkdownText.collapseForTouchBar(markdown)
         return attributed(collapsed.isEmpty ? " " : collapsed, size: touchBarFontSize)
     }

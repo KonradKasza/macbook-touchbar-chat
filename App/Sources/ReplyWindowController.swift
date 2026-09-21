@@ -26,20 +26,24 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
     private var themePopup: NSPopUpButton!
     private var statusLabel: NSTextField!
     private var rootView: NSView!
+    private var toolbarView: NSView!
+    private var composerBar: NSView!
+    private var inputWell: NSView!
     private var topDivider: NSView!
     private var bottomDivider: NSView!
+    private var stopWidthConstraint: NSLayoutConstraint!
     private var lastTurns: [ChatTurn] = []
     private var lastFallback: String = ""
 
     private convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 580),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = "TouchbarChat"
-        window.minSize = NSSize(width: 420, height: 360)
+        window.minSize = NSSize(width: 440, height: 380)
         window.center()
         self.init(window: window)
         window.delegate = self
@@ -82,7 +86,7 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         textView.textStorage?.setAttributedString(render(turns: live, fallback: ""))
         textView.scrollToEndOfDocument(nil)
         setComposerEnabled(false)
-        stopButton.isEnabled = true
+        setStopVisible(true)
         statusLabel.stringValue = "Generating…"
     }
 
@@ -113,7 +117,7 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         rebuildToolsMenu()
         let busy = TouchBarController.shared.isBusy
         setComposerEnabled(!busy)
-        stopButton.isEnabled = busy
+        setStopVisible(busy)
         statusLabel.stringValue = busy ? "Generating…" : ""
     }
 
@@ -121,26 +125,52 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         window?.appearance = theme.windowAppearance
         window?.backgroundColor = theme.nsBackground
         rootView?.layer?.backgroundColor = theme.nsBackground.cgColor
+        toolbarView?.layer?.backgroundColor = theme.chromeSurface.cgColor
+        composerBar?.layer?.backgroundColor = theme.chromeSurface.cgColor
+        inputWell?.layer?.backgroundColor = theme.inputWell.cgColor
         topDivider?.layer?.backgroundColor = theme.nsHairline.cgColor
         bottomDivider?.layer?.backgroundColor = theme.nsHairline.cgColor
-        textView?.textColor = theme.nsBody
-        textView?.font = theme.bodyFont
         statusLabel?.textColor = theme.nsStatus
+        inputField?.textColor = theme.nsBody
+        inputField?.placeholderAttributedString = NSAttributedString(
+            string: "Message…",
+            attributes: [
+                .foregroundColor: theme.nsStatus,
+                .font: NSFont.systemFont(ofSize: 14)
+            ]
+        )
+        // Do NOT set textView.textColor / .font — AppKit reapplies those across the
+        // whole storage and flattens role-label colors when the window becomes key.
+        textView?.typingAttributes = [
+            .font: theme.bodyFont,
+            .foregroundColor: theme.nsBody
+        ]
         if rerender {
-            textView?.textStorage?.setAttributedString(render(turns: lastTurns, fallback: lastFallback))
+            reapplyTranscript(preservingScroll: true)
+        }
+    }
+
+    private func reapplyTranscript(preservingScroll: Bool) {
+        guard let textView else { return }
+        let scroll = textView.enclosingScrollView
+        let savedY = scroll?.contentView.bounds.origin.y ?? 0
+        textView.textStorage?.setAttributedString(render(turns: lastTurns, fallback: lastFallback))
+        if preservingScroll, let scroll {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: savedY))
+            scroll.reflectScrolledClipView(scroll.contentView)
         }
     }
 
     func markIdle() {
         setComposerEnabled(true)
-        stopButton.isEnabled = false
+        setStopVisible(false)
         statusLabel.stringValue = ""
         updateTitle(model: TouchBarController.shared.currentModel)
     }
 
     func markBusy() {
         setComposerEnabled(false)
-        stopButton.isEnabled = true
+        setStopVisible(true)
         statusLabel.stringValue = "Generating…"
     }
 
@@ -152,36 +182,47 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         window?.contentView = root
         rootView = root
 
-        // Top bar
+        // Toolbar surface
+        let toolbar = NSView(frame: .zero)
+        toolbar.wantsLayer = true
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbarView = toolbar
+
         menuButton = NSButton(title: "Menu", target: self, action: #selector(openAppMenu(_:)))
         menuButton.bezelStyle = .rounded
-        menuButton.controlSize = .small
+        menuButton.controlSize = .regular
         menuButton.toolTip = "Open TouchBar Chat menu"
 
         modelPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        modelPopup.controlSize = .small
+        modelPopup.controlSize = .regular
         modelPopup.target = self
         modelPopup.action = #selector(modelChanged(_:))
         modelPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        modelPopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         toolsButton = NSPopUpButton(frame: .zero, pullsDown: true)
-        toolsButton.controlSize = .small
+        toolsButton.controlSize = .regular
         toolsButton.addItem(withTitle: "Tools")
         rebuildToolsMenu()
 
         themePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        themePopup.controlSize = .small
+        themePopup.controlSize = .regular
         themePopup.target = self
         themePopup.action = #selector(themeChanged(_:))
         refreshThemePopup()
 
-        let topBar = NSStackView(views: [menuButton, modelPopup, toolsButton, themePopup])
+        let trailing = NSStackView(views: [toolsButton, themePopup])
+        trailing.orientation = .horizontal
+        trailing.spacing = 8
+        trailing.setContentHuggingPriority(.required, for: .horizontal)
+
+        let topBar = NSStackView(views: [menuButton, modelPopup, trailing])
         topBar.orientation = .horizontal
         topBar.alignment = .centerY
-        topBar.spacing = 8
-        topBar.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        topBar.spacing = 12
         topBar.translatesAutoresizingMaskIntoConstraints = false
-        modelPopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        toolbar.addSubview(topBar)
 
         // Transcript
         let scroll = NSScrollView(frame: .zero)
@@ -196,9 +237,7 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
-        textView.textColor = NSColor(calibratedWhite: 0.92, alpha: 1)
-        textView.font = NSFont.systemFont(ofSize: 15)
-        textView.textContainerInset = NSSize(width: 16, height: 14)
+        textView.textContainerInset = NSSize(width: 22, height: 18)
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
@@ -207,23 +246,39 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         scroll.documentView = textView
         self.textView = textView
 
-        // Divider lines via thin views
         topDivider = hairline()
         bottomDivider = hairline()
 
-        // Composer
+        // Composer bar
+        let composer = NSView(frame: .zero)
+        composer.wantsLayer = true
+        composer.translatesAutoresizingMaskIntoConstraints = false
+        composerBar = composer
+
         statusLabel = NSTextField(labelWithString: "")
-        statusLabel.font = NSFont.systemFont(ofSize: 11)
+        statusLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
         statusLabel.isEditable = false
         statusLabel.isBordered = false
         statusLabel.drawsBackground = false
+        statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let well = NSView(frame: .zero)
+        well.wantsLayer = true
+        well.layer?.cornerRadius = 8
+        well.translatesAutoresizingMaskIntoConstraints = false
+        inputWell = well
 
         inputField = NSTextField(string: "")
-        inputField.placeholderString = "Message…  Return to send"
+        inputField.placeholderString = "Message…"
         inputField.font = NSFont.systemFont(ofSize: 14)
+        inputField.isBordered = false
+        inputField.isBezeled = false
+        inputField.drawsBackground = false
+        inputField.focusRingType = .none
         inputField.delegate = self
-        inputField.focusRingType = .default
         inputField.translatesAutoresizingMaskIntoConstraints = false
+
+        well.addSubview(inputField)
 
         sendButton = NSButton(title: "Send", target: self, action: #selector(sendTapped))
         sendButton.bezelStyle = .rounded
@@ -231,37 +286,44 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
 
         stopButton = NSButton(title: "Stop", target: self, action: #selector(stopTapped))
         stopButton.bezelStyle = .rounded
-        stopButton.isEnabled = false
+        stopButton.isHidden = true
         stopButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let composerRow = NSStackView(views: [inputField, stopButton, sendButton])
+        let composerRow = NSStackView(views: [well, stopButton, sendButton])
         composerRow.orientation = .horizontal
         composerRow.alignment = .centerY
-        composerRow.spacing = 8
+        composerRow.spacing = 10
         composerRow.translatesAutoresizingMaskIntoConstraints = false
-        inputField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let composerStack = NSStackView(views: [statusLabel, composerRow])
         composerStack.orientation = .vertical
         composerStack.alignment = .leading
-        composerStack.spacing = 4
+        composerStack.spacing = 6
         composerStack.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addSubview(topBar)
+        composer.addSubview(composerStack)
+
+        root.addSubview(toolbar)
         root.addSubview(topDivider)
         root.addSubview(scroll)
         root.addSubview(bottomDivider)
-        root.addSubview(composerStack)
+        root.addSubview(composer)
+
+        stopWidthConstraint = stopButton.widthAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
-            topBar.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
-            topBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            topBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            toolbar.topAnchor.constraint(equalTo: root.topAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
-            modelPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
-            modelPopup.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+            topBar.topAnchor.constraint(equalTo: toolbar.topAnchor, constant: 12),
+            topBar.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 16),
+            topBar.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -16),
+            topBar.bottomAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: -12),
 
-            topDivider.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 10),
+            modelPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+
+            topDivider.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
             topDivider.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             topDivider.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             topDivider.heightAnchor.constraint(equalToConstant: 1),
@@ -274,25 +336,40 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
             bottomDivider.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             bottomDivider.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             bottomDivider.heightAnchor.constraint(equalToConstant: 1),
-            bottomDivider.bottomAnchor.constraint(equalTo: composerStack.topAnchor, constant: -10),
+            bottomDivider.bottomAnchor.constraint(equalTo: composer.topAnchor),
 
-            composerStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            composerStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
-            composerStack.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
+            composer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            composer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            composer.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+
+            composerStack.topAnchor.constraint(equalTo: composer.topAnchor, constant: 12),
+            composerStack.leadingAnchor.constraint(equalTo: composer.leadingAnchor, constant: 16),
+            composerStack.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -16),
+            composerStack.bottomAnchor.constraint(equalTo: composer.bottomAnchor, constant: -14),
 
             composerRow.widthAnchor.constraint(equalTo: composerStack.widthAnchor),
-            inputField.heightAnchor.constraint(equalToConstant: 28),
-            stopButton.widthAnchor.constraint(equalToConstant: 56),
-            sendButton.widthAnchor.constraint(equalToConstant: 64)
+
+            well.heightAnchor.constraint(equalToConstant: 34),
+            inputField.leadingAnchor.constraint(equalTo: well.leadingAnchor, constant: 10),
+            inputField.trailingAnchor.constraint(equalTo: well.trailingAnchor, constant: -10),
+            inputField.centerYAnchor.constraint(equalTo: well.centerYAnchor),
+
+            stopWidthConstraint,
+            sendButton.widthAnchor.constraint(equalToConstant: 68)
         ])
     }
 
     private func hairline() -> NSView {
         let v = NSView(frame: .zero)
         v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor(calibratedWhite: 0.22, alpha: 1).cgColor
         v.translatesAutoresizingMaskIntoConstraints = false
         return v
+    }
+
+    private func setStopVisible(_ visible: Bool) {
+        stopButton.isHidden = !visible
+        stopButton.isEnabled = visible
+        stopWidthConstraint.constant = visible ? 56 : 0
     }
 
     private func updateTitle(model: String) {
@@ -415,15 +492,15 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
     }
 
     private func toolsTitle() -> String {
-        guard TouchBarController.shared.toolsEnabled else { return "Tools: Off" }
+        guard TouchBarController.shared.toolsEnabled else { return "Tools" }
         let plugins = MCPPlugins.discoverPluginIDs()
         let enabledIDs = Set(TouchBarController.shared.enabledMCPPluginIDs)
         let count: Int = {
             if enabledIDs.isEmpty { return plugins.count }
             return enabledIDs.intersection(plugins).count
         }()
-        if count == 0 { return "Tools: On" }
-        return "Tools: \(count)"
+        if count == 0 { return "Tools" }
+        return "Tools (\(count))"
     }
 
     // MARK: - Actions
@@ -494,6 +571,7 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
 
     func windowDidBecomeKey(_ notification: Notification) {
         syncChrome()
+        reapplyTranscript(preservingScroll: true)
     }
 
     // MARK: - Render
@@ -509,68 +587,122 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         if turns.isEmpty {
             let text = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty {
-                return MarkdownStyle.replyBody(
-                    "No messages yet — type below or use Ask on the Touch Bar.",
-                    theme: theme
-                )
+                return emptyState(theme: theme)
             }
             return MarkdownStyle.replyBody(text, theme: theme)
         }
 
         for (index, turn) in turns.enumerated() {
             if index > 0 {
-                result.append(spacer(theme: theme))
-                result.append(divider(theme: theme))
-                result.append(spacer(theme: theme))
+                result.append(turnBreak(theme: theme))
             }
 
             result.append(roleLabel("You", theme: theme))
-            result.append(newline())
+            result.append(newline(theme: theme))
             result.append(MarkdownStyle.replyBody(turn.prompt, theme: theme))
-            result.append(spacer(theme: theme))
+            result.append(blockGap(theme: theme))
             result.append(roleLabel(turn.displayModel, theme: theme))
-            result.append(newline())
+            result.append(newline(theme: theme))
             result.append(MarkdownStyle.replyBody(turn.reply, theme: theme))
         }
 
         return result
     }
 
+    private func emptyState(theme: ChatHistoryTheme) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+        paragraph.paragraphSpacingBefore = 8
+        return NSAttributedString(
+            string: "No messages yet.",
+            attributes: [
+                .font: theme.bodyFont,
+                .foregroundColor: theme.nsStatus,
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+
     private func roleLabel(_ name: String, theme: ChatHistoryTheme) -> NSAttributedString {
         let font: NSFont = {
             switch theme {
             case .matrix: return NSFont.monospacedSystemFont(ofSize: 12, weight: .bold)
-            case .dark, .light: return NSFont.systemFont(ofSize: 12, weight: .bold)
+            case .dark, .light: return NSFont.systemFont(ofSize: 12, weight: .semibold)
             }
         }()
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacingBefore = 2
+        paragraph.paragraphSpacing = 4
         return NSAttributedString(
-            string: name,
+            string: name.uppercased(),
             attributes: [
                 .font: font,
                 .foregroundColor: theme.nsRole,
-                .kern: 0.4
+                .kern: 1.1,
+                .paragraphStyle: paragraph
             ]
         )
     }
 
-    private func newline() -> NSAttributedString {
-        NSAttributedString(string: "\n")
+    private func newline(theme: ChatHistoryTheme) -> NSAttributedString {
+        NSAttributedString(
+            string: "\n",
+            attributes: [
+                .font: theme.bodyFont,
+                .foregroundColor: theme.nsBody
+            ]
+        )
     }
 
-    private func spacer(theme: ChatHistoryTheme) -> NSAttributedString {
+    private func blockGap(theme: ChatHistoryTheme) -> NSAttributedString {
         NSAttributedString(
             string: "\n\n",
-            attributes: [.font: NSFont.systemFont(ofSize: 8), .foregroundColor: theme.nsBody]
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 6),
+                .foregroundColor: theme.nsBody
+            ]
         )
     }
 
-    private func divider(theme: ChatHistoryTheme) -> NSAttributedString {
-        NSAttributedString(
-            string: "────────────────────",
+    /// Soft break between turns — spacing only, no ASCII rule.
+    private func turnBreak(theme: ChatHistoryTheme) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacingBefore = 10
+        paragraph.paragraphSpacing = 6
+        return NSAttributedString(
+            string: "\n\n",
             attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: theme.nsDivider
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: theme.nsHairline,
+                .paragraphStyle: paragraph
             ]
         )
+    }
+}
+
+// MARK: - Theme chrome surfaces (AppKit)
+
+private extension ChatHistoryTheme {
+    /// Slightly lifted strip behind toolbar / composer.
+    var chromeSurface: NSColor {
+        switch self {
+        case .dark:
+            return NSColor(calibratedWhite: 0.14, alpha: 1)
+        case .light:
+            return NSColor(calibratedWhite: 0.93, alpha: 1)
+        case .matrix:
+            return NSColor(calibratedRed: 0.06, green: 0.08, blue: 0.06, alpha: 1)
+        }
+    }
+
+    var inputWell: NSColor {
+        switch self {
+        case .dark:
+            return NSColor(calibratedWhite: 0.18, alpha: 1)
+        case .light:
+            return NSColor(calibratedWhite: 1.0, alpha: 1)
+        case .matrix:
+            return NSColor(calibratedRed: 0.05, green: 0.10, blue: 0.05, alpha: 1)
+        }
     }
 }
