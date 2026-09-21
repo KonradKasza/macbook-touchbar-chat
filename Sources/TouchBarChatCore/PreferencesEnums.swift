@@ -26,6 +26,57 @@ public enum TouchBarFontSize: String, CaseIterable, Sendable {
     }
 }
 
+/// Horizontal auto-scroll speed for the Touch Bar message strip while a reply streams.
+public enum TouchBarAutoScrollSpeed: String, CaseIterable, Sendable {
+    case off
+    case slow
+    case medium
+    case fast
+    case custom
+
+    public var title: String {
+        switch self {
+        case .off: return "Off"
+        case .slow: return "Slow"
+        case .medium: return "Medium"
+        case .fast: return "Fast"
+        case .custom: return "Custom"
+        }
+    }
+
+    /// Built-in speeds. For `.custom`, pass the user value via `pointsPerSecond(custom:)`.
+    public var presetPointsPerSecond: Double {
+        switch self {
+        case .off: return 0
+        case .slow: return 22
+        case .medium: return 40
+        case .fast: return 70
+        case .custom: return 0
+        }
+    }
+
+    /// Points per second along the strip. `0` disables auto-scroll.
+    public func pointsPerSecond(custom: Double) -> Double {
+        switch self {
+        case .custom:
+            return max(0, custom)
+        default:
+            return presetPointsPerSecond
+        }
+    }
+
+    /// Delay after the first token before scrolling begins.
+    public var startDelay: TimeInterval {
+        switch self {
+        case .off: return 0
+        case .slow, .medium, .fast, .custom: return 0.55
+        }
+    }
+
+    public static let defaultCustomPointsPerSecond: Double = 55
+    public static let customPointsPerSecondRange: ClosedRange<Double> = 1...200
+}
+
 public enum ChatHistoryTheme: String, CaseIterable, Sendable {
     case dark
     case light

@@ -13,10 +13,19 @@ final class MessageScrollItem: NSCustomTouchBarItem {
     private(set) var fullText: String = "Ready — …"
 
     /// Classic braille spinner frames.
-    private static let spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    private static let spinnerFrames = ["⠋", "⠙", "⠹", "⠼", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     private var spinnerTimer: Timer?
     private var spinnerFrame = 0
     private var spinnerCaption = ""
+
+    // Auto-scroll (streaming only). Conservative: delay → gentle crawl; user swipe cancels.
+    private var autoScrollPointsPerSecond: Double = TouchBarAutoScrollSpeed.medium.presetPointsPerSecond
+    private var autoScrollStartDelay: TimeInterval = TouchBarAutoScrollSpeed.medium.startDelay
+    private var autoScrollTick: TimeInterval = 1.0 / 30.0
+    private var autoScrollTimer: Timer?
+    private var autoScrollStartItem: DispatchWorkItem?
+    private var autoScrollCancelledByUser = false
+    private var isStreamingReply = false
 
     var onTap: (() -> Void)? {
         get { scrollView.onTap }
@@ -37,8 +46,31 @@ final class MessageScrollItem: NSCustomTouchBarItem {
         setup()
     }
 
+    func configureAutoScroll(pointsPerSecond: Double, startDelay: TimeInterval, tickInterval: TimeInterval) {
+        autoScrollPointsPerSecond = max(0, pointsPerSecond)
+        autoScrollStartDelay = max(0, startDelay)
+        let nextTick = max(1.0 / 120.0, tickInterval)
+        let tickChanged = abs(autoScrollTick - nextTick) > 0.000_5
+        autoScrollTick = nextTick
+        if autoScrollPointsPerSecond <= 0 {
+            stopAutoScroll(clearPending: true)
+        } else if tickChanged, autoScrollTimer != nil {
+            // Rebuild timer so an in-flight crawl picks up the new frame rate.
+            autoScrollTimer?.invalidate()
+            autoScrollTimer = nil
+            beginAutoScroll()
+        }
+    }
+
     func setText(_ full: String, preview: String? = nil, scrollToStart: Bool = true) {
         stopThinkingAnimation()
+        isStreamingReply = false
+        if scrollToStart {
+            // Idle / status jumps — kill any crawl.
+            stopAutoScroll(clearPending: true)
+            autoScrollCancelledByUser = false
+        }
+        // Otherwise leave an in-flight crawl running toward the end.
         fullText = full
         label.attributedStringValue = MarkdownStyle.touchBarPreview(preview ?? full)
         layoutLabel()
@@ -47,7 +79,7 @@ final class MessageScrollItem: NSCustomTouchBarItem {
         }
     }
 
-    /// Streaming updates. Scrolls to start only on the first chunk of a new reply.
+    /// Streaming updates. First chunk → start; later chunks never fight auto-scroll offset.
     func setStreamingText(_ full: String) {
         let isFirstChunk = isThinking
             || fullText.hasPrefix("You:")
@@ -66,22 +98,31 @@ final class MessageScrollItem: NSCustomTouchBarItem {
         layoutLabel()
 
         if isFirstChunk {
+            isStreamingReply = true
+            autoScrollCancelledByUser = false
             scrollToStartImmediate()
-        } else {
-            // Keep the user's place while the document grows.
-            let maxX = max(0, document.bounds.width - scrollView.contentView.bounds.width)
+            scheduleAutoScrollStart()
+        } else if autoScrollTimer == nil {
+            // Hold place until crawl starts (or forever if Off / user cancelled).
+            let maxX = maxScrollX()
             let x = min(savedX, maxX)
             scrollView.contentView.scroll(to: NSPoint(x: x, y: 0))
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
+        // If auto-scroll is running, leave X alone — tickAutoScroll clamps to growing maxX.
     }
 
     func setStatus(_ status: String) {
+        stopAutoScroll(clearPending: true)
+        isStreamingReply = false
         setText(status)
     }
 
     /// Braille spinner while waiting for the first token (no echoed user question).
     func startThinkingAnimation(caption: String = "") {
+        stopAutoScroll(clearPending: true)
+        isStreamingReply = false
+        autoScrollCancelledByUser = false
         stopThinkingAnimation()
         spinnerCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         fullText = "Thinking"
@@ -109,6 +150,82 @@ final class MessageScrollItem: NSCustomTouchBarItem {
             return
         }
         setText(fullText, scrollToStart: false)
+    }
+
+    // MARK: - Auto-scroll
+
+    private func scheduleAutoScrollStart() {
+        stopAutoScroll(clearPending: true)
+        guard autoScrollPointsPerSecond > 0 else { return }
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.beginAutoScroll()
+        }
+        autoScrollStartItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + autoScrollStartDelay,
+            execute: work
+        )
+    }
+
+    private func beginAutoScroll() {
+        guard autoScrollPointsPerSecond > 0 else { return }
+        guard !autoScrollCancelledByUser else { return }
+        guard autoScrollTimer == nil else { return }
+        // Start even if maxX is still 0 — tick waits until the strip overflows.
+
+        let timer = Timer(timeInterval: autoScrollTick, repeats: true) { [weak self] _ in
+            self?.tickAutoScroll()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        autoScrollTimer = timer
+    }
+
+    private func tickAutoScroll() {
+        if autoScrollCancelledByUser {
+            stopAutoScroll(clearPending: true)
+            return
+        }
+
+        let maxX = maxScrollX()
+        // Content still fits — keep the timer alive until overflow or stream end.
+        if maxX <= 0.5 {
+            if !isStreamingReply {
+                stopAutoScroll(clearPending: true)
+            }
+            return
+        }
+
+        let current = scrollView.contentView.bounds.origin.x
+        let step = CGFloat(autoScrollPointsPerSecond) * CGFloat(autoScrollTick)
+        let next = min(current + step, maxX)
+
+        scrollView.contentView.scroll(to: NSPoint(x: next, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+
+        // Stop only when we've caught the end AND streaming has finished.
+        if next >= maxX - 0.5, !isStreamingReply {
+            stopAutoScroll(clearPending: true)
+        }
+    }
+
+    private func stopAutoScroll(clearPending: Bool) {
+        if clearPending {
+            autoScrollStartItem?.cancel()
+            autoScrollStartItem = nil
+        }
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+    }
+
+    private func cancelAutoScrollByUser() {
+        guard isStreamingReply || autoScrollTimer != nil || autoScrollStartItem != nil else { return }
+        autoScrollCancelledByUser = true
+        stopAutoScroll(clearPending: true)
+    }
+
+    private func maxScrollX() -> CGFloat {
+        max(0, document.bounds.width - scrollView.contentView.bounds.width)
     }
 
     private func advanceSpinner() {
@@ -143,6 +260,9 @@ final class MessageScrollItem: NSCustomTouchBarItem {
         scrollView.scrollerInsets = .init()
         scrollView.allowedTouchTypes = [.direct]
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.onUserScrollIntention = { [weak self] in
+            self?.cancelAutoScrollByUser()
+        }
 
         label.isEditable = false
         label.isSelectable = false
@@ -156,7 +276,6 @@ final class MessageScrollItem: NSCustomTouchBarItem {
         label.allowsEditingTextAttributes = true
         label.focusRingType = .none
         label.setContentCompressionResistancePriority(.required, for: .horizontal)
-        // Kill cell chrome that can look like an outline on the strip.
         if let cell = label.cell as? NSTextFieldCell {
             cell.backgroundColor = .clear
             cell.drawsBackground = false
@@ -176,16 +295,20 @@ final class MessageScrollItem: NSCustomTouchBarItem {
     }
 
     private func layoutLabel() {
-        label.sizeToFit()
-        // Prefer cell’s actual drawn height so baseline sits centered in the strip.
-        let textSize = label.attributedStringValue.size()
-        let textHeight = max(ceil(textSize.height), 16)
-        let textWidth = max(ceil(textSize.width), 1)
+        let attr = label.attributedStringValue
+        // `size()` / `sizeToFit()` often undershoot by a fraction of a point on
+        // system fonts — enough to clip the last glyph with `.byClipping`.
+        let measured = attr.boundingRect(
+            with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: stripHeight * 2),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let trailingSlack: CGFloat = 8
+        let textHeight = max(ceil(measured.height), 16)
+        let textWidth = max(ceil(measured.width) + trailingSlack, 1)
         let docWidth = max(textWidth + sidePad * 2, max(scrollView.bounds.width, 500))
 
         document.frame = NSRect(x: 0, y: 0, width: docWidth, height: stripHeight)
 
-        // Non-flipped coords: center the label vertically in the 30pt strip.
         let y = floor((stripHeight - textHeight) / 2)
         label.frame = NSRect(x: sidePad, y: y, width: textWidth, height: textHeight)
     }
@@ -205,17 +328,17 @@ final class MessageScrollItem: NSCustomTouchBarItem {
 /// Horizontal scroll strip; opens reply only on a short stationary tap.
 private final class TappableScrollView: NSScrollView {
     var onTap: (() -> Void)?
+    /// Fired when the user intentionally pans (cancels auto-scroll).
+    var onUserScrollIntention: (() -> Void)?
 
     private var touchStart: NSPoint?
     private var startScrollX: CGFloat = 0
     private var touchBeganAt: Date?
     private var didDrag = false
+    private var didNotifyScrollIntention = false
 
-    /// Movement beyond this cancels the tap.
     private let moveSlop: CGFloat = 4
-    /// Scroll offset change beyond this cancels the tap.
     private let scrollSlop: CGFloat = 0.5
-    /// Finger-down longer than this is not a tap.
     private let maxTapDuration: TimeInterval = 0.35
 
     override init(frame frameRect: NSRect) {
@@ -237,6 +360,7 @@ private final class TappableScrollView: NSScrollView {
         startScrollX = contentView.bounds.origin.x
         touchBeganAt = Date()
         didDrag = false
+        didNotifyScrollIntention = false
     }
 
     override func touchesMoved(with event: NSEvent) {
@@ -271,17 +395,24 @@ private final class TappableScrollView: NSScrollView {
     }
 
     private func markDragIfNeeded(with event: NSEvent) {
+        var dragging = false
         if abs(contentView.bounds.origin.x - startScrollX) > scrollSlop {
-            didDrag = true
-            return
+            dragging = true
+        } else if let origin = touchStart {
+            let points = event.touches(matching: [.moved, .stationary, .ended], in: self)
+            for touch in points {
+                let p = touch.location(in: self)
+                if hypot(p.x - origin.x, p.y - origin.y) > moveSlop {
+                    dragging = true
+                    break
+                }
+            }
         }
-        guard let origin = touchStart else { return }
-        let points = event.touches(matching: [.moved, .stationary, .ended], in: self)
-        for touch in points {
-            let p = touch.location(in: self)
-            if hypot(p.x - origin.x, p.y - origin.y) > moveSlop {
-                didDrag = true
-                return
+        if dragging {
+            didDrag = true
+            if !didNotifyScrollIntention {
+                didNotifyScrollIntention = true
+                onUserScrollIntention?()
             }
         }
     }

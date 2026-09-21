@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "ellipsis.bubble", accessibilityDescription: "TouchBar Chat")
+            button.image = NSImage(systemSymbolName: "message.fill", accessibilityDescription: "TouchBar Chat")
             button.image?.isTemplate = true
         }
 
@@ -28,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fontItem = NSMenuItem(title: "Font Size", action: nil, keyEquivalent: "")
         fontItem.submenu = makeFontSizeMenu()
         menu.addItem(fontItem)
+
+        let scrollItem = NSMenuItem(title: "Auto Scroll", action: nil, keyEquivalent: "")
+        scrollItem.submenu = makeAutoScrollMenu()
+        menu.addItem(scrollItem)
 
         let themeItem = NSMenuItem(title: "Chat Theme", action: nil, keyEquivalent: "")
         themeItem.submenu = makeChatThemeMenu()
@@ -91,6 +95,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.state = (size == current) ? .on : .off
             menu.addItem(item)
         }
+        return menu
+    }
+
+    private func makeAutoScrollMenu() -> NSMenu {
+        let menu = NSMenu()
+        let current = TouchBarController.shared.currentAutoScrollSpeed
+        let customPPS = Int(TouchBarController.shared.currentAutoScrollCustomPPS.rounded())
+        for speed in TouchBarAutoScrollSpeed.allCases {
+            let title: String
+            if speed == .custom {
+                title = "Custom (\(customPPS) pt/s)…"
+            } else {
+                title = speed.title
+            }
+            let item = NSMenuItem(title: title, action: #selector(pickAutoScroll(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = speed.rawValue
+            item.state = (speed == current) ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(NSMenuItem.separator())
+        let smooth = NSMenuItem(
+            title: "Smoother scrolling",
+            action: #selector(toggleAutoScrollSmooth(_:)),
+            keyEquivalent: ""
+        )
+        smooth.target = self
+        smooth.state = TouchBarController.shared.autoScrollSmooth ? .on : .off
+        menu.addItem(smooth)
         return menu
     }
 
@@ -226,6 +259,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.state = (raw == size.rawValue) ? .on : .off
             }
         }
+    }
+
+    @objc private func pickAutoScroll(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let speed = TouchBarAutoScrollSpeed(rawValue: raw) else { return }
+        if speed == .custom {
+            promptCustomAutoScrollSpeed()
+        } else {
+            TouchBarController.shared.setAutoScrollSpeed(speed)
+            refreshAutoScrollMenu()
+        }
+    }
+
+    private func refreshAutoScrollMenu() {
+        if let scrollItem = statusItem.menu?.items.first(where: { $0.title == "Auto Scroll" }) {
+            scrollItem.submenu = makeAutoScrollMenu()
+        }
+    }
+
+    private func promptCustomAutoScrollSpeed() {
+        let alert = NSAlert()
+        alert.messageText = "Custom auto-scroll speed"
+        alert.informativeText = "Points per second along the Touch Bar strip (1–200). Presets: Slow 22, Medium 40, Fast 70."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
+        field.stringValue = String(Int(TouchBarController.shared.currentAutoScrollCustomPPS.rounded()))
+        field.placeholderString = "55"
+        alert.accessoryView = field
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else {
+            refreshAutoScrollMenu()
+            return
+        }
+        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(trimmed), value > 0 else {
+            refreshAutoScrollMenu()
+            return
+        }
+        TouchBarController.shared.setAutoScrollCustomPPS(value)
+        refreshAutoScrollMenu()
+    }
+
+    @objc private func toggleAutoScrollSmooth(_ sender: NSMenuItem) {
+        let enabled = sender.state != .on
+        TouchBarController.shared.setAutoScrollSmooth(enabled)
+        refreshAutoScrollMenu()
     }
 
     private func makeAskColorMenu() -> NSMenu {

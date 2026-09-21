@@ -28,6 +28,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private var conversation: [ChatTurn] = []
     private weak var askButton: NSButton?
     private var stripItem: NSCustomTouchBarItem!
+    private weak var stripButton: NSButton?
 
     private override init() {
         super.init()
@@ -47,19 +48,22 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         applyItemIdentifiers()
 
         messageItem = MessageScrollItem(identifier: .message)
+        applyAutoScrollFromConfig()
         messageItem.onTap = { [weak self] in
             self?.openReplyWindow()
         }
 
         let stripItem = NSCustomTouchBarItem(identifier: .controlStrip)
         let button = NSButton(
-            image: stripIcon(),
+            image: Self.controlStripMessageIcon(),
             target: self,
             action: #selector(showFromControlStrip)
         )
-        button.bezelColor = NSColor.systemTeal
+        button.imagePosition = .imageOnly
         stripItem.view = button
         self.stripItem = stripItem
+        self.stripButton = button
+        applyStripAppearance()
 
         NSTouchBarItem.addSystemTrayItem(stripItem)
         restoreControlStripIcon()
@@ -338,7 +342,8 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func finishSuccess(prompt: String, reply: String, model: String) {
         let resolvedModel = model.isEmpty ? client.config.model : model
         conversation.append(ChatTurn(prompt: prompt, reply: reply, model: resolvedModel))
-        messageItem.setText(reply)
+        // Keep scroll position / in-flight crawl — don't jump back to start.
+        messageItem.setText(reply, scrollToStart: false)
         streamingPartial = ""
         sendTask = nil
         if ReplyWindowController.shared.isVisible {
@@ -357,7 +362,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             messageItem.setStatus("Stopped")
         } else {
             conversation.append(ChatTurn(prompt: prompt, reply: partial, model: resolvedModel))
-            messageItem.setText(partial)
+            messageItem.setText(partial, scrollToStart: false)
         }
         streamingPartial = ""
         sendTask = nil
@@ -371,6 +376,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     /// Call after Settings saves so the strip reflects the chosen model.
     func notifyConfigChanged() {
+        applyAutoScrollFromConfig()
         refreshModelHint()
         if ReplyWindowController.shared.isVisible {
             ReplyWindowController.shared.syncChrome()
@@ -407,6 +413,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         config.askButtonColorHex = color.hexString
         client.updateConfig(config)
         askButton?.bezelColor = color
+        applyStripAppearance()
         // Re-present so Touch Bar refreshes the bezel reliably.
         present()
     }
@@ -422,6 +429,48 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         MarkdownStyle.touchBarFontSize = CGFloat(size.pointSize)
         messageItem.reloadAppearance()
         present()
+    }
+
+    var currentAutoScrollSpeed: TouchBarAutoScrollSpeed {
+        client.config.autoScrollSpeed
+    }
+
+    var currentAutoScrollCustomPPS: Double {
+        client.config.autoScrollCustomPPS
+    }
+
+    func setAutoScrollSpeed(_ speed: TouchBarAutoScrollSpeed) {
+        var config = client.config
+        config.autoScrollSpeed = speed
+        client.updateConfig(config)
+        applyAutoScrollFromConfig()
+    }
+
+    func setAutoScrollCustomPPS(_ pps: Double) {
+        var config = client.config
+        config.autoScrollCustomPPS = pps
+        config.autoScrollSpeed = .custom
+        client.updateConfig(config)
+        applyAutoScrollFromConfig()
+    }
+
+    private func applyAutoScrollFromConfig() {
+        messageItem.configureAutoScroll(
+            pointsPerSecond: client.config.resolvedAutoScrollPointsPerSecond,
+            startDelay: client.config.autoScrollStartDelay,
+            tickInterval: client.config.autoScrollTickInterval
+        )
+    }
+
+    var autoScrollSmooth: Bool {
+        client.config.touchBarAutoScrollSmooth
+    }
+
+    func setAutoScrollSmooth(_ enabled: Bool) {
+        var config = client.config
+        config.touchBarAutoScrollSmooth = enabled
+        client.updateConfig(config)
+        applyAutoScrollFromConfig()
     }
 
     var toolsEnabled: Bool {
@@ -544,17 +593,35 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         }
     }
 
-    private func stripIcon() -> NSImage {
+    private func applyStripAppearance() {
+        let color = client.config.askButtonColor
+        stripButton?.image = Self.controlStripMessageIcon()
+        stripButton?.bezelColor = color
+        stripButton?.contentTintColor = .white
+    }
+
+    /// White message glyph for the Control Strip; bezel carries the user accent color.
+    private static func controlStripMessageIcon() -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        if let symbol = NSImage(systemSymbolName: "message.fill", accessibilityDescription: "Chat")?
+            .withSymbolConfiguration(config) {
+            let image = symbol.copy() as? NSImage ?? symbol
+            image.isTemplate = true
+            return image
+        }
+
+        // Fallback if SF Symbols unavailable.
         let size = NSSize(width: 22, height: 22)
         let image = NSImage(size: size, flipped: false) { rect in
-            let inset = rect.insetBy(dx: 3, dy: 3)
-            NSColor.white.setStroke()
-            let path = NSBezierPath(roundedRect: inset, xRadius: 3, yRadius: 3)
-            path.lineWidth = 1.5
-            path.stroke()
-            let dot = NSBezierPath(ovalIn: NSRect(x: rect.midX - 2, y: rect.midY - 2, width: 4, height: 4))
+            let bubble = NSBezierPath()
+            let body = NSRect(x: 3.5, y: 6.5, width: 15, height: 11)
+            bubble.appendRoundedRect(body, xRadius: 4, yRadius: 4)
+            bubble.move(to: NSPoint(x: 8, y: 6.5))
+            bubble.line(to: NSPoint(x: 6, y: 3))
+            bubble.line(to: NSPoint(x: 11, y: 6.5))
+            bubble.close()
             NSColor.white.setFill()
-            dot.fill()
+            bubble.fill()
             return true
         }
         image.isTemplate = true

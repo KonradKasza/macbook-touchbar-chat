@@ -68,6 +68,11 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RES"
 cp "$ROOT/App/Resources/Info.plist" "$APP/Contents/Info.plist"
 
+echo "==> Generating AppIcon.icns"
+"$SWIFTC" -sdk "$SDK" -target "$TARGET" -framework AppKit -framework Foundation \
+  -o "$OUT/generate-app-icon" "$ROOT/scripts/generate-app-icon.swift"
+"$OUT/generate-app-icon" "$RES/AppIcon.icns"
+
 "$SWIFTC" \
   -sdk "$SDK" \
   -target "$TARGET" \

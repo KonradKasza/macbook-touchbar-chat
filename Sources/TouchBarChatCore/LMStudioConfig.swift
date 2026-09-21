@@ -13,6 +13,12 @@ public struct LMStudioConfig: Equatable, Sendable {
     public var enableTools: Bool
     public var enabledMCPPluginIDs: [String]
     public var chatHistoryTheme: String
+    /// Touch Bar strip auto-scroll while streaming: off | slow | medium | fast | custom
+    public var touchBarAutoScrollSpeed: String
+    /// Used when `touchBarAutoScrollSpeed` is `custom` (points per second).
+    public var touchBarAutoScrollCustomPPS: Double
+    /// Higher tick rate (~60 fps) for less choppy strip motion; default is ~30 fps.
+    public var touchBarAutoScrollSmooth: Bool
 
     public static let defaultsKey = "LMStudioConfig"
     public static let legacySuiteName = "local.touchbar.chat"
@@ -28,7 +34,10 @@ public struct LMStudioConfig: Equatable, Sendable {
         hideControlStrip: Bool = false,
         enableTools: Bool = false,
         enabledMCPPluginIDs: [String] = [],
-        chatHistoryTheme: String = ChatHistoryTheme.dark.rawValue
+        chatHistoryTheme: String = ChatHistoryTheme.dark.rawValue,
+        touchBarAutoScrollSpeed: String = TouchBarAutoScrollSpeed.medium.rawValue,
+        touchBarAutoScrollCustomPPS: Double = TouchBarAutoScrollSpeed.defaultCustomPointsPerSecond,
+        touchBarAutoScrollSmooth: Bool = false
     ) {
         self.baseURL = baseURL
         self.apiToken = apiToken
@@ -41,6 +50,9 @@ public struct LMStudioConfig: Equatable, Sendable {
         self.enableTools = enableTools
         self.enabledMCPPluginIDs = enabledMCPPluginIDs
         self.chatHistoryTheme = chatHistoryTheme
+        self.touchBarAutoScrollSpeed = touchBarAutoScrollSpeed
+        self.touchBarAutoScrollCustomPPS = touchBarAutoScrollCustomPPS
+        self.touchBarAutoScrollSmooth = touchBarAutoScrollSmooth
     }
 
     public var fontSize: TouchBarFontSize {
@@ -51,6 +63,36 @@ public struct LMStudioConfig: Equatable, Sendable {
     public var historyTheme: ChatHistoryTheme {
         get { ChatHistoryTheme(rawValue: chatHistoryTheme) ?? .dark }
         set { chatHistoryTheme = newValue.rawValue }
+    }
+
+    public var autoScrollSpeed: TouchBarAutoScrollSpeed {
+        get { TouchBarAutoScrollSpeed(rawValue: touchBarAutoScrollSpeed) ?? .medium }
+        set { touchBarAutoScrollSpeed = newValue.rawValue }
+    }
+
+    /// Clamped custom PPS used when preset is `.custom`.
+    public var autoScrollCustomPPS: Double {
+        get {
+            let range = TouchBarAutoScrollSpeed.customPointsPerSecondRange
+            return min(max(touchBarAutoScrollCustomPPS, range.lowerBound), range.upperBound)
+        }
+        set {
+            let range = TouchBarAutoScrollSpeed.customPointsPerSecondRange
+            touchBarAutoScrollCustomPPS = min(max(newValue, range.lowerBound), range.upperBound)
+        }
+    }
+
+    public var resolvedAutoScrollPointsPerSecond: Double {
+        autoScrollSpeed.pointsPerSecond(custom: autoScrollCustomPPS)
+    }
+
+    public var autoScrollStartDelay: TimeInterval {
+        autoScrollSpeed.startDelay
+    }
+
+    /// Timer interval for strip auto-scroll (~30 fps default, ~60 fps when smooth).
+    public var autoScrollTickInterval: TimeInterval {
+        touchBarAutoScrollSmooth ? (1.0 / 60.0) : (1.0 / 30.0)
     }
 
     /// Non-secret fields for UserDefaults JSON (never includes `apiToken`).
@@ -65,6 +107,9 @@ public struct LMStudioConfig: Equatable, Sendable {
         public var enableTools: Bool
         public var enabledMCPPluginIDs: [String]
         public var chatHistoryTheme: String
+        public var touchBarAutoScrollSpeed: String
+        public var touchBarAutoScrollCustomPPS: Double
+        public var touchBarAutoScrollSmooth: Bool
 
         public init(
             baseURL: String,
@@ -76,7 +121,10 @@ public struct LMStudioConfig: Equatable, Sendable {
             hideControlStrip: Bool,
             enableTools: Bool,
             enabledMCPPluginIDs: [String],
-            chatHistoryTheme: String
+            chatHistoryTheme: String,
+            touchBarAutoScrollSpeed: String,
+            touchBarAutoScrollCustomPPS: Double,
+            touchBarAutoScrollSmooth: Bool
         ) {
             self.baseURL = baseURL
             self.model = model
@@ -88,6 +136,9 @@ public struct LMStudioConfig: Equatable, Sendable {
             self.enableTools = enableTools
             self.enabledMCPPluginIDs = enabledMCPPluginIDs
             self.chatHistoryTheme = chatHistoryTheme
+            self.touchBarAutoScrollSpeed = touchBarAutoScrollSpeed
+            self.touchBarAutoScrollCustomPPS = touchBarAutoScrollCustomPPS
+            self.touchBarAutoScrollSmooth = touchBarAutoScrollSmooth
         }
 
         public init(from decoder: Decoder) throws {
@@ -104,6 +155,11 @@ public struct LMStudioConfig: Equatable, Sendable {
             enabledMCPPluginIDs = try c.decodeIfPresent([String].self, forKey: .enabledMCPPluginIDs) ?? []
             chatHistoryTheme = try c.decodeIfPresent(String.self, forKey: .chatHistoryTheme)
                 ?? ChatHistoryTheme.dark.rawValue
+            touchBarAutoScrollSpeed = try c.decodeIfPresent(String.self, forKey: .touchBarAutoScrollSpeed)
+                ?? TouchBarAutoScrollSpeed.medium.rawValue
+            touchBarAutoScrollCustomPPS = try c.decodeIfPresent(Double.self, forKey: .touchBarAutoScrollCustomPPS)
+                ?? TouchBarAutoScrollSpeed.defaultCustomPointsPerSecond
+            touchBarAutoScrollSmooth = try c.decodeIfPresent(Bool.self, forKey: .touchBarAutoScrollSmooth) ?? false
         }
     }
 
@@ -118,7 +174,10 @@ public struct LMStudioConfig: Equatable, Sendable {
             hideControlStrip: hideControlStrip,
             enableTools: enableTools,
             enabledMCPPluginIDs: enabledMCPPluginIDs,
-            chatHistoryTheme: chatHistoryTheme
+            chatHistoryTheme: chatHistoryTheme,
+            touchBarAutoScrollSpeed: touchBarAutoScrollSpeed,
+            touchBarAutoScrollCustomPPS: touchBarAutoScrollCustomPPS,
+            touchBarAutoScrollSmooth: touchBarAutoScrollSmooth
         )
     }
 
@@ -134,7 +193,10 @@ public struct LMStudioConfig: Equatable, Sendable {
             hideControlStrip: payload.hideControlStrip,
             enableTools: payload.enableTools,
             enabledMCPPluginIDs: payload.enabledMCPPluginIDs,
-            chatHistoryTheme: payload.chatHistoryTheme
+            chatHistoryTheme: payload.chatHistoryTheme,
+            touchBarAutoScrollSpeed: payload.touchBarAutoScrollSpeed,
+            touchBarAutoScrollCustomPPS: payload.touchBarAutoScrollCustomPPS,
+            touchBarAutoScrollSmooth: payload.touchBarAutoScrollSmooth
         )
     }
 

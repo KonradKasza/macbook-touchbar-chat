@@ -1,16 +1,14 @@
 # TouchBar Chat
 
-Menu-bar macOS app that puts a local **[LM Studio](https://lmstudio.ai)** chat on the **Touch Bar** (MacBook Pro with Touch Bar). 
+Menu-bar macOS app that puts a local **[LM Studio](https://lmstudio.ai)** chat on the **Touch Bar** - you need MacBook Pro with Touch Bar (so M1/M2 exclusive - unless Apple brings it back). 
 
-**Backend:** LM Studio only (`http://127.0.0.1:1234` by default). No cloud providers.
+**Backend:** LM Studio only (`http://127.0.0.1:1234` by default). No support for cloud providers - could be tested with LiteLLM for that.
 
 **License:** [MIT](LICENSE)
 
 Bundle identifier: `com.touchbarchat.app`
 
-![gif1](./example1.gif)
-
-![gif2](./example2.gif)
+![gif1](./guf.gif)
 
 ---
 
@@ -30,15 +28,14 @@ Bundle identifier: `com.touchbarchat.app`
 - Presented automatically on launch; **Control Strip** icon brings it back later
 - Stays up until you dismiss with the custom close control (**×**)
 - **Ask (`>`)** — floating input panel (Return send, Esc cancel, paste supported)
-- **Message strip** — scrollable reply preview; braille spinner while waiting; tap opens the chat window
+- **Message strip** — scrollable reply preview; braille spinner while waiting; auto-scroll while streaming (speed in Settings / menu); tap opens the chat window
 - Optional **Hide Control Strip** for a wider bar (menu bar toggle)
 
 ### Menu bar
 
-- Show Touch Bar, Chat Window…, Ask…, New Chat
-- **> Button Color**, Font Size, Chat Theme (Dark / Light / Matrix)
-- Hide Control Strip
-- **Tools (MCP)** — enable plugins from `~/.lmstudio/mcp.json`
+- **> Button Color**, Font Size, Auto Scroll (Off / Slow / Medium / Fast / Custom pt/s, optional smoother ~60 fps), Chat Theme (Dark / Light / Matrix)
+- Hide Control Strip for more room
+- **Tools (MCP)** — enable plugins from `~/.lmstudio/mcp.json` - more info below
 - **Instructions** - similiar to agents.md 
 
 ---

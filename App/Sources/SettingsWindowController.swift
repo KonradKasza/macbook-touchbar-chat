@@ -10,18 +10,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var baseURLField: NSTextField!
     private var tokenField: NSSecureTextField!
     private var modelPopup: NSPopUpButton!
+    private var autoScrollPopup: NSPopUpButton!
+    private var autoScrollCustomField: NSTextField!
+    private var autoScrollCustomRow: NSStackView!
+    private var autoScrollSmoothCheckbox: NSButton!
     private var statusLabel: NSTextField!
 
     private convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = "TouchBar Chat Settings"
-        window.contentMinSize = NSSize(width: 480, height: 280)
-        window.contentMaxSize = NSSize(width: 640, height: 420)
+        window.contentMinSize = NSSize(width: 480, height: 380)
+        window.contentMaxSize = NSSize(width: 640, height: 520)
         window.center()
         self.init(window: window)
         window.delegate = self
@@ -43,7 +47,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func buildUI() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: windowWidth, height: 300))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: windowWidth, height: 400))
         window?.contentView = root
 
         func label(_ text: String) -> NSTextField {
@@ -67,7 +71,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         modelPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         modelPopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let instructionsHint = NSTextField(wrappingLabelWithString: "Instructions… in the menu bar. For Brave Search / MCP: enable Tools, set API token here, and in LM Studio Server Settings turn on “Allow calling servers from mcp.json”.")
+        let scrollLabel = label("Touch Bar auto-scroll")
+        autoScrollPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for speed in TouchBarAutoScrollSpeed.allCases {
+            autoScrollPopup.addItem(withTitle: speed.title)
+            autoScrollPopup.lastItem?.representedObject = speed.rawValue
+        }
+        autoScrollPopup.target = self
+        autoScrollPopup.action = #selector(autoScrollPresetChanged)
+        autoScrollPopup.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        autoScrollPopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        autoScrollCustomField = NSTextField(string: "")
+        autoScrollCustomField.placeholderString = "55"
+        configureSingleLineField(autoScrollCustomField)
+        let unitLabel = NSTextField(labelWithString: "pt/s (1–200)")
+        unitLabel.textColor = .secondaryLabelColor
+        unitLabel.font = NSFont.systemFont(ofSize: 12)
+        autoScrollCustomRow = NSStackView(views: [autoScrollCustomField, unitLabel])
+        autoScrollCustomRow.orientation = .horizontal
+        autoScrollCustomRow.alignment = .centerY
+        autoScrollCustomRow.spacing = 8
+        autoScrollCustomRow.setHuggingPriority(.defaultLow, for: .horizontal)
+
+        autoScrollSmoothCheckbox = NSButton(
+            checkboxWithTitle: "Smoother scrolling (~60 fps)",
+            target: nil,
+            action: nil
+        )
+        autoScrollSmoothCheckbox.font = NSFont.systemFont(ofSize: 12)
+
+        let instructionsHint = NSTextField(wrappingLabelWithString: "Instructions… in the menu bar. For Brave Search / MCP: enable Tools, set API token here, and in LM Studio Server Settings turn on “Allow calling servers from mcp.json”. Auto-scroll gently pans the strip after a short delay while a reply streams; swipe cancels until the next reply. Choose Custom to set points/second yourself.")
         instructionsHint.textColor = .secondaryLabelColor
         instructionsHint.font = NSFont.systemFont(ofSize: 12)
         instructionsHint.preferredMaxLayoutWidth = windowWidth - 40
@@ -92,6 +126,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             baseLabel, baseURLField,
             tokenLabel, tokenField,
             modelLabel, modelPopup,
+            scrollLabel, autoScrollPopup, autoScrollCustomRow, autoScrollSmoothCheckbox,
             instructionsHint,
             statusLabel
         ])
@@ -117,6 +152,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             baseURLField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             tokenField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             modelPopup.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            autoScrollPopup.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            autoScrollCustomRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            autoScrollCustomField.widthAnchor.constraint(equalToConstant: 72),
             instructionsHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
             refreshButton.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
@@ -150,6 +188,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             modelPopup.addItem(withTitle: c.model)
             modelPopup.selectItem(withTitle: c.model)
         }
+        let speed = c.autoScrollSpeed
+        if let idx = TouchBarAutoScrollSpeed.allCases.firstIndex(of: speed) {
+            autoScrollPopup.selectItem(at: idx)
+        }
+        autoScrollCustomField.stringValue = String(Int(c.autoScrollCustomPPS.rounded()))
+        autoScrollSmoothCheckbox.state = c.touchBarAutoScrollSmooth ? .on : .off
+        updateCustomScrollEnabled()
+    }
+
+    @objc private func autoScrollPresetChanged() {
+        updateCustomScrollEnabled()
+    }
+
+    private func updateCustomScrollEnabled() {
+        let isCustom = (autoScrollPopup.selectedItem?.representedObject as? String) == TouchBarAutoScrollSpeed.custom.rawValue
+        autoScrollCustomField.isEnabled = isCustom
+        autoScrollCustomRow.alphaValue = isCustom ? 1 : 0.45
     }
 
     @objc private func refreshModels() {
@@ -227,6 +282,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         c.baseURL = baseURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         c.apiToken = tokenField.stringValue
         c.model = modelPopup.titleOfSelectedItem ?? ""
+        if let raw = autoScrollPopup.selectedItem?.representedObject as? String,
+           let speed = TouchBarAutoScrollSpeed(rawValue: raw) {
+            c.autoScrollSpeed = speed
+        }
+        let trimmed = autoScrollCustomField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value = Double(trimmed) {
+            c.autoScrollCustomPPS = value
+        }
+        c.touchBarAutoScrollSmooth = autoScrollSmoothCheckbox.state == .on
         client.updateConfig(c)
     }
 }
