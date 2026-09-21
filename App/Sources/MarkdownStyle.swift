@@ -88,15 +88,8 @@ enum MarkdownStyle {
                 .foregroundColor: baseColor
             ]
         )
-        applyInline(
-            in: result,
-            pattern: #"\[([^\]]+)\]\([^)]+\)"#,
-            attributes: [
-                .font: bodyFont,
-                .foregroundColor: linkColor,
-                .underlineStyle: NSUnderlineStyle.single.rawValue
-            ]
-        )
+        applyMarkdownLinks(in: result, font: bodyFont, color: linkColor)
+        applyAutolinks(in: result, font: bodyFont, color: linkColor)
 
         // Safety net for any remaining ATX hashes (line-start or mid-string after collapse).
         stripPattern(in: result, pattern: #"(?m)^[ \t]*#{1,6}[ \t]+"#)
@@ -132,6 +125,110 @@ enum MarkdownStyle {
             let inner = text.attributedSubstring(from: capture).mutableCopy() as! NSMutableAttributedString
             inner.addAttributes(attributes, range: NSRange(location: 0, length: inner.length))
             text.replaceCharacters(in: match.range, with: inner)
+        }
+    }
+
+    /// `[title](url)` → titled run with a real `.link` so NSTextView can open it.
+    private static func applyMarkdownLinks(
+        in text: NSMutableAttributedString,
+        font: NSFont,
+        color: NSColor
+    ) {
+        guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)\s]+)\)"#) else { return }
+
+        while true {
+            let full = NSRange(location: 0, length: text.length)
+            guard let match = regex.firstMatch(in: text.string, options: [], range: full),
+                  match.numberOfRanges >= 3 else { break }
+
+            let titleRange = match.range(at: 1)
+            let urlRange = match.range(at: 2)
+            guard let titleSwift = Range(titleRange, in: text.string),
+                  let urlSwift = Range(urlRange, in: text.string) else { break }
+
+            let title = String(text.string[titleSwift])
+            let rawURL = String(text.string[urlSwift])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                // Angle-bracket autolinks / trailing punctuation leftovers.
+                .trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: color,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .cursor: NSCursor.pointingHand
+            ]
+            if let url = Self.url(fromMarkdown: rawURL) {
+                attrs[.link] = url
+            }
+
+            text.replaceCharacters(
+                in: match.range,
+                with: NSAttributedString(string: title, attributes: attrs)
+            )
+        }
+    }
+
+    private static func url(fromMarkdown raw: String) -> URL? {
+        if let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            return url
+        }
+        // Bare domain / path without scheme — models often omit https://
+        if raw.contains("."), !raw.contains(" "),
+           let url = URL(string: "https://\(raw)"),
+           url.host != nil {
+            return url
+        }
+        return nil
+    }
+
+    /// Bare `https://…` URLs (models often put them on their own line in parentheses).
+    private static func applyAutolinks(
+        in text: NSMutableAttributedString,
+        font: NSFont,
+        color: NSColor
+    ) {
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>\[\]"'«»]+"#) else { return }
+        let matches = regex.matches(
+            in: text.string,
+            options: [],
+            range: NSRange(location: 0, length: text.length)
+        )
+
+        for match in matches.reversed() {
+            var range = match.range
+            // Trim trailing punctuation commonly glued onto URLs.
+            while range.length > 0 {
+                let end = range.location + range.length - 1
+                guard let endRange = Range(NSRange(location: end, length: 1), in: text.string) else { break }
+                if ",.;:!?)]}>”'".contains(text.string[endRange]) {
+                    range.length -= 1
+                } else {
+                    break
+                }
+            }
+            guard range.length > 0 else { continue }
+
+            // Skip code spans and already-linked runs.
+            if text.attribute(.link, at: range.location, effectiveRange: nil) != nil { continue }
+            if text.attribute(.backgroundColor, at: range.location, effectiveRange: nil) != nil { continue }
+
+            guard let swiftRange = Range(range, in: text.string),
+                  let url = URL(string: String(text.string[swiftRange])),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https" else { continue }
+
+            text.addAttributes(
+                [
+                    .link: url,
+                    .font: font,
+                    .foregroundColor: color,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .cursor: NSCursor.pointingHand
+                ],
+                range: range
+            )
         }
     }
 

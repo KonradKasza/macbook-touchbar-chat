@@ -13,7 +13,7 @@ struct ChatTurn {
 }
 
 /// Conversation window: transcript + composer + model / tools chrome.
-final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWindowDelegate {
+final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSTextViewDelegate, NSWindowDelegate {
     static let shared = ReplyWindowController()
 
     private var textView: NSTextView!
@@ -83,11 +83,33 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         lastTurns = live
         lastFallback = ""
         updateTitle(model: model)
+
+        // Stick to bottom only if the user was already there; otherwise keep their place
+        // so they can scroll up and read while generation continues.
+        let stickToBottom = isScrolledNearBottom()
+        let savedY = textView.enclosingScrollView?.contentView.bounds.origin.y ?? 0
         textView.textStorage?.setAttributedString(render(turns: live, fallback: ""))
-        textView.scrollToEndOfDocument(nil)
+        if stickToBottom {
+            textView.scrollToEndOfDocument(nil)
+        } else if let scroll = textView.enclosingScrollView {
+            let maxY = max(0, textView.bounds.height - scroll.contentView.bounds.height)
+            let y = min(max(savedY, 0), maxY)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+
         setComposerEnabled(false)
         setStopVisible(true)
         statusLabel.stringValue = "Generating…"
+    }
+
+    /// Whether the transcript viewport is close enough to the end to keep following new tokens.
+    private func isScrolledNearBottom(threshold: CGFloat = 56) -> Bool {
+        guard let scroll = textView.enclosingScrollView else { return true }
+        let clip = scroll.contentView.bounds
+        let docHeight = max(textView.bounds.height, clip.height)
+        let distanceFromBottom = docHeight - (clip.origin.y + clip.height)
+        return distanceFromBottom <= threshold
     }
 
     /// Tap again on the Touch Bar strip closes an already-visible window.
@@ -144,6 +166,11 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         textView?.typingAttributes = [
             .font: theme.bodyFont,
             .foregroundColor: theme.nsBody
+        ]
+        textView?.linkTextAttributes = [
+            .foregroundColor: theme.nsLink,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand
         ]
         if rerender {
             reapplyTranscript(preservingScroll: true)
@@ -233,10 +260,17 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         scroll.autohidesScrollers = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let textView = NSTextView(frame: .zero)
+        let textView = TranscriptTextView(frame: .zero)
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
+        textView.delegate = self
+        textView.displaysLinkToolTips = true
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.systemTeal,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .cursor: NSCursor.pointingHand
+        ]
         textView.textContainerInset = NSSize(width: 22, height: 18)
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
@@ -569,6 +603,20 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
         return false
     }
 
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        let url: URL? = {
+            if let url = link as? URL { return url }
+            if let string = link as? String { return URL(string: string) }
+            return nil
+        }()
+        guard let url, let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else {
+            return false
+        }
+        NSWorkspace.shared.open(url)
+        return true
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         syncChrome()
         reapplyTranscript(preservingScroll: true)
@@ -677,6 +725,43 @@ final class ReplyWindowController: NSWindowController, NSTextFieldDelegate, NSWi
                 .paragraphStyle: paragraph
             ]
         )
+    }
+}
+
+/// NSTextView that opens `.link` attributes on a normal click (AppKit is flaky about this).
+private final class TranscriptTextView: NSTextView {
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 1, openLink(at: event) {
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    private func openLink(at event: NSEvent) -> Bool {
+        guard let layoutManager, let textContainer, let storage = textStorage else { return false }
+        var fraction: CGFloat = 0
+        let point = convert(event.locationInWindow, from: nil)
+        let adjusted = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        let index = layoutManager.characterIndex(
+            for: adjusted,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: &fraction
+        )
+        guard index < storage.length else { return false }
+        guard let link = storage.attribute(.link, at: index, effectiveRange: nil) else { return false }
+
+        let url: URL? = {
+            if let url = link as? URL { return url }
+            if let string = link as? String { return URL(string: string) }
+            return nil
+        }()
+        guard let url, let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
+        NSWorkspace.shared.open(url)
+        return true
     }
 }
 
