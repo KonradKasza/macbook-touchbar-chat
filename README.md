@@ -8,7 +8,7 @@ Menu-bar macOS app that puts a local **[LM Studio](https://lmstudio.ai)** chat o
 
 Bundle identifier: `com.touchbarchat.app`
 
-![gif1](./guf.gif)
+![gif1](./gif1.gif)
 
 ---
 
