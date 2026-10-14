@@ -4,6 +4,7 @@ import TouchBarChatCore
 extension NSTouchBarItem.Identifier {
     static let controlStrip = NSTouchBarItem.Identifier("chat.touchbar.controlStrip")
     static let ask = NSTouchBarItem.Identifier("chat.touchbar.ask")
+    static let askClipboard = NSTouchBarItem.Identifier("chat.touchbar.askClipboard")
     static let message = NSTouchBarItem.Identifier("chat.touchbar.message")
     /// Stand-in for the system close box (placement 1 / full-width rarely shows the real one).
     static let closeLeft = NSTouchBarItem.Identifier("chat.touchbar.closeLeft")
@@ -73,11 +74,11 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         if client.config.hideControlStrip {
             // Full-width: escape slot often missing — put ✕ in the item list.
             touchBar.escapeKeyReplacementItemIdentifier = nil
-            touchBar.defaultItemIdentifiers = [.closeLeft, .ask, .message]
+            touchBar.defaultItemIdentifiers = [.closeLeft, .ask, .askClipboard, .message]
         } else {
             // With Control Strip: use escape/close slot only, so we don't get system X + ours.
             touchBar.escapeKeyReplacementItemIdentifier = .closeLeft
-            touchBar.defaultItemIdentifiers = [.ask, .message]
+            touchBar.defaultItemIdentifiers = [.ask, .askClipboard, .message]
         }
     }
 
@@ -176,6 +177,25 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             askButton = button
             item.view = button
             return item
+        case .askClipboard:
+            let item = NSCustomTouchBarItem(identifier: .askClipboard)
+            let symbol = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            let button: NSButton
+            if let image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Ask with clipboard")?
+                .withSymbolConfiguration(symbol) {
+                button = NSButton(image: image, target: self, action: #selector(askWithClipboardTapped))
+                button.imagePosition = .imageOnly
+            } else {
+                button = NSButton(title: "📋", target: self, action: #selector(askWithClipboardTapped))
+            }
+            button.bezelColor = NSColor(calibratedWhite: 0.22, alpha: 1)
+            button.toolTip = "Ask with clipboard"
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 36)
+            ])
+            item.view = button
+            return item
         case .message:
             return messageItem
         default:
@@ -187,6 +207,20 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     @objc func askTapped() {
         inputPanel.show()
+        DispatchQueue.main.async { [weak self] in
+            self?.reassertPresentedBar()
+        }
+    }
+
+    @objc func askWithClipboardTapped() {
+        let clip = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !clip.isEmpty else {
+            messageItem.setStatus("Clipboard is empty")
+            reassertPresentedBar()
+            return
+        }
+        inputPanel.show(attachment: clip)
         DispatchQueue.main.async { [weak self] in
             self?.reassertPresentedBar()
         }

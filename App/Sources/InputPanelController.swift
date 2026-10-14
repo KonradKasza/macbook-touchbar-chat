@@ -4,14 +4,29 @@ import AppKit
 final class InputPanelController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     private var panel: NSPanel?
     private var field: NSTextField?
+    private var attachmentLabel: NSTextField?
+    /// Clipboard text sent alongside the typed prompt (newlines preserved).
+    private var attachment: String?
     var onSubmit: ((String) -> Void)?
     var onDismiss: (() -> Void)?
 
-    func show(near screen: NSScreen? = NSScreen.main) {
+    func show(near screen: NSScreen? = NSScreen.main, attachment: String? = nil) {
         if panel == nil {
             buildPanel()
         }
         guard let panel, let field else { return }
+
+        self.attachment = attachment
+        if let attachment {
+            let lines = attachment.split(separator: "\n", omittingEmptySubsequences: false).count
+            attachmentLabel?.stringValue = lines > 1
+                ? "📋 \(lines) lines"
+                : "📋 \(attachment.count) chars"
+            attachmentLabel?.toolTip = String(attachment.prefix(500))
+            attachmentLabel?.isHidden = false
+        } else {
+            attachmentLabel?.isHidden = true
+        }
 
         let frame = screen?.visibleFrame ?? NSRect(x: 200, y: 200, width: 800, height: 600)
         let width: CGFloat = 520
@@ -29,6 +44,8 @@ final class InputPanelController: NSObject, NSWindowDelegate, NSTextFieldDelegat
 
     func close() {
         let wasVisible = panel?.isVisible == true
+        attachment = nil
+        attachmentLabel?.isHidden = true
         panel?.orderOut(nil)
         if wasVisible {
             onDismiss?()
@@ -74,14 +91,26 @@ final class InputPanelController: NSObject, NSWindowDelegate, NSTextFieldDelegat
         panel.contentView = root
         root.addSubview(field)
 
+        let label = NSTextField(labelWithString: "")
+        label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        label.textColor = NSColor(calibratedWhite: 0.75, alpha: 1)
+        label.isHidden = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        root.addSubview(label)
+
         NSLayoutConstraint.activate([
             field.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            field.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            field.centerYAnchor.constraint(equalTo: root.centerYAnchor)
+            field.trailingAnchor.constraint(equalTo: label.leadingAnchor, constant: -8),
+            field.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            label.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            label.centerYAnchor.constraint(equalTo: root.centerYAnchor)
         ])
 
         self.panel = panel
         self.field = field
+        self.attachmentLabel = label
 
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel?.isKeyWindow == true else { return event }
@@ -169,9 +198,15 @@ final class InputPanelController: NSObject, NSWindowDelegate, NSTextFieldDelegat
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
             let text = field?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else { return true }
+            let prompt: String
+            if let attachment {
+                prompt = text.isEmpty ? attachment : "\(text)\n\n```\n\(attachment)\n```"
+            } else {
+                guard !text.isEmpty else { return true }
+                prompt = text
+            }
             close()
-            onSubmit?(text)
+            onSubmit?(prompt)
             return true
         }
         if commandSelector == #selector(NSText.paste(_:)) || commandSelector == #selector(NSTextView.pasteAsPlainText(_:)) {
